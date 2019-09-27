@@ -1,0 +1,292 @@
+---
+jupyter:
+  jupytext:
+    formats: ipynb,Rmd
+    text_representation:
+      extension: .Rmd
+      format_name: rmarkdown
+      format_version: '1.1'
+      jupytext_version: 1.2.4
+  kernelspec:
+    display_name: Python 3
+    language: python
+    name: python3
+---
+
+# ReadMe
+
+**This is the notebook to import the data from K/I/whatever the driver is and send raw/cleaned data to a postgresql DB on powerplant.**
+
+**Plan:**
+
+1. Read data in
+2. Select down to right TDR measurments
+3. Send the raw data from each tdr to DB - this is for examing the suprise values 
+4. Clean out missing and stupid high values
+5. Average the value in each layer (7 layers in total)
+6. Calculate deficit 
+7. Upload the calculated deficit to DB - for real irrigation scheduling - need to be a separate table 
+
+**PostgreSQL credentials**
+
+    host = "database.powerplant.pfr.co.nz",
+    database = "cflfcl_Rainshelter_SWC",
+    user = "cflfcl_Rainshelter_SWC",
+    password = "o654UkI6iGNwhzHu"
+    
+**Format that `sqlalchemy` like**
+    
+    "postgresql://cflfcl_Rainshelter_SWC:o654UkI6iGNwhzHu@database.powerplant.pfr.co.nz/cflfcl_Rainshelter_SWC"
+    
+**Demo data source**
+
+    K:\Rainshelter\StonySoilLysimeters
+
+
+### libraries
+
+```{python}
+import datetime
+import pandas as pd
+import numpy as np
+import time 
+import psycopg2
+from sqlalchemy import create_engine
+```
+
+### DataSource
+
+```{python}
+path="K:/Rainshelter/StonySoilLysimeters/"
+```
+
+```{python}
+# Read in the main data
+AllData=pd.read_csv(path + 'DownloadedData/StonyLysimetersCS650.dat', #specify file path for data to read in
+                         parse_dates=True, #tell the function to parse date columns to datetime formats
+                         dayfirst=True, #tell the function that the day is before the year in the data i.e format='%d/%m/%Y %H:%M'
+                         skiprows = [0,2,3], #leave out rows 1, 3 and 4 which have redundant information
+                         index_col = 0, #Use the first column, which is Date, as an index
+                         na_values = 'NAN')
+```
+
+```{python}
+AllData
+```
+
+
+```{python}
+#The index for sensors
+AllDataIndex = pd.read_excel(path + "Lysometer_design.xlsx",
+                             sheet_name="SensorIndex",
+                             index_col = 0)
+AllDataIndex.head()
+```
+
+```{python}
+# filter the part that interested in 
+FilteredIndex=AllDataIndex[AllDataIndex.Measurement.isin(['VolumetricWaterContent'])] # structure to add in more cols
+```
+
+```{python}
+FilteredIndex.head()
+```
+
+
+```{python}
+FilteredIndex.describe()
+```
+
+```{python}
+# select only the interested columns 
+FilteredData=AllData.loc[:,FilteredIndex.index]
+```
+
+```{python}
+# set up the index and output the last row 
+FilteredDataTrans=FilteredData.transpose() # transpose to the format match the index format
+FilteredDataIndexed=pd.concat([FilteredIndex,FilteredDataTrans], axis=1) # join them together
+
+FilteredDataIndexed.index.name='ColumnHeader'
+FilteredDataIndexed.set_index(['Measurement','Depth','Gravels','Stones','Column','Sensor', 'MUX', 'Port','Units','Summary','Block','Treatment'], 
+                        append=False, inplace=True)
+FilteredDataIndexed.sort_index(inplace=True)
+FieldData=FilteredDataIndexed.transpose()
+FieldData.index = pd.to_datetime(FieldData.index) 
+LastRow = FieldData.index.size
+np.save('LastRow.npy',LastRow)
+FieldData.to_pickle('.\FieldData.pkl')
+```
+```{python}
+# last filter to get ready upload the raw 
+# is not actually calculate any mean, just want to see the data
+grouped = FieldData.loc['2015-10-10':].groupby(level=['Sensor'],axis=1).mean().round(2)
+```
+
+
+## Slice out a piece to do a test 
+
+```{python}
+# slice 2000 rows as a test set
+Test=FieldData.iloc[(LastRow-2000):LastRow, ]
+Test.head()
+```
+
+```{python}
+# round values to 2 decimals for quick upload
+Testgrouped = Test.groupby(level=['Depth','Sensor'],axis=1).mean().round(2)
+
+# change the index into single column name
+L1 = Testgrouped.columns.get_level_values(0)
+L2 = Testgrouped.columns.get_level_values(1)
+
+# rename the columns
+Testgrouped.columns= (L1 + '_' + L2)
+```
+
+```{python}
+# slice two sets from the test. one pretends to be the old file, one for update 
+Testgrouped = Testgrouped.dropna(axis=1, how='all')
+T1 = Testgrouped.iloc[0 : (Testgrouped.index.size - 10), ]
+T2 = Testgrouped.iloc[(Testgrouped.index.size - 10) : Testgrouped.index.size, ]
+```
+
+```{python}
+# Checking the time 
+T1.iloc[(T1.index.size - 1):T1.index.size,]
+
+T2# Checking the time 
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+source("./DBconnection_funs.R")
+con = setupDBConn()
+dbListTables(con)
+
+dbWriteTable(con, name = "Test", value = py$T1, overwrite = TRUE)
+
+dbWriteTable(con, name = "Test", value = py$T2, append = TRUE) 
+sql <- paste0("CREATE INDEX ON Test (row.names);")
+  dbExecute(con, sql)
+```
+
+### DB connection and uploading
+
+```{python}
+# FieldData.dtypes
+# FieldData.index
+engine = create_engine("postgresql://cflfcl_Rainshelter_SWC:o654UkI6iGNwhzHu@database.powerplant.pfr.co.nz/cflfcl_Rainshelter_SWC")
+# grouped.to_sql(name="RawData_96Sensors",con=engine,if_exists='replace' )
+```
+
+**Updating the DB**
+
+```{python}
+try:
+    con = psycopg2.connect(
+        host = "database.powerplant.pfr.co.nz",
+        database = "cflfcl_Rainshelter_SWC",
+        user = "cflfcl_Rainshelter_SWC",
+        password = "o654UkI6iGNwhzHu"
+    )
+    cursor = con.cursor()
+    # Print PostgreSQL Connection properties
+    print ( con.get_dsn_parameters(),"\n")
+    
+    con.commit()
+    count = cursor.rowcount
+    print (count) 
+    
+    # Print PostgreSQL version
+    cursor.execute("SELECT version();")
+    record = cursor.fetchone()
+    print("You are connected to - ", record,"\n")
+
+except (Exception, psycopg2.Error) as error :
+    print ("Error while connecting to PostgreSQL", error)
+finally:
+    #closing database connection.
+        if(con):
+            cursor.close()
+            con.close()
+            print("PostgreSQL connection is closed")
+```
+
+```{python}
+#Place holder for `.csv` index file
+# AllDataIndex=pd.read_csv('./IndexFiles/SoilWaterAndTempIndex.csv',
+#                          index_col = 0)
+# AllDataIndex
+```
+
+```{python}
+grouped.tail()
+```
+
+### Calculate Deficit 
+
+```{python}
+DataMeans =  FieldData.loc['2015-10-10':].groupby(level=['Measurement','Depth','Gravels','Stones'],axis=1).mean()
+DataMeans =  DataMeans.dropna(axis=1) #For some reason it keeps non valid combinations in so need to extract with this function
+ProfileWater = DataMeans.VolumetricWaterContent.loc[:, 'D1'] * 150 + \
+               DataMeans.VolumetricWaterContent.loc[:, 'D2'] * 150 + \
+               DataMeans.VolumetricWaterContent.loc[:, 'D3'] * 150 + \
+               DataMeans.VolumetricWaterContent.loc[:, 'D4'] * 150 
+FieldCapacity = ProfileWater.resample('D').max()
+FieldCapacity = FieldCapacity.loc['2015-10-14'] +10 # I would have though this would return a data frame with a single row but instead it returns a series with a multiindex in columns
+SoilWaterDeficit = -(FieldCapacity - ProfileWater)  
+```
+
+```{python}
+SoilWaterDeficit.transpose()
+```
+
+```{python}
+#uploading 
+SoilWaterDeficit.to_sql(name="SoilWaterDeficit",con=engine, if_exists ='replace')
+```
+
+```{python}
+def Update():
+    #Update Data Frame with data that has been logged since last update
+    FieldData = UpdataDataFrame()
+    #Calculate treatment means omitting data prior to 2014-11-05 08:00:00 to avoid NaN values
+    DataMeans =  FieldData.ix['2015-10-10':].groupby(level=['Measurement','Depth','Irrigation', 'Nitrogen'],axis=1).mean()
+    DataMeans =  DataMeans.dropna(axis=1) #For some reason it keeps non valid combinations in so need to extract with this function
+    DataMeans = DataMeans.resample('4H').last()
+    
+    #Calculate the water content of the soil profile by multiplying the volumetric water content by each layers
+    #depth and summing.  The 0-15 layers are divided by 2 to average the two readings
+    ProfileWater = DataMeans.VolumetricWaterContent.loc[:, 'D1'] * 150 + \
+                   DataMeans.VolumetricWaterContent.loc[:, 'D2'] * 150 + \
+                   DataMeans.VolumetricWaterContent.loc[:, 'D3'] * 150 + \
+                   DataMeans.VolumetricWaterContent.loc[:, 'D4'] * 150 
+
+    FieldCapacity = ProfileWater.resample('D', how='max')
+    FieldCapacity = FieldCapacity.ix['2015-10-14'] +30 # I would have though this would return a data frame with a single row but instead it returns a series with a multiindex in columns
+    SoilWaterDeficit = -(FieldCapacity - ProfileWater)    # This calculation only works because field capacity is a multi index series
+```
+
+```{python}
+
+```
+
+```{python}
+while True:
+    try:
+        Update() #get fresh data and send to graph
+    except:
+        retrys = 1
+        print('Attempt to stream data failed')
+        while retrys < 5: ##retry connecting 4 times
+            time.sleep(5)  ##wait 2 min 
+            try:
+                Update() # have another go
+            except:
+                print('Retry' + str(retrys) + ' failed')
+                retrys +=1 #increment try counter and try again
+            else:
+                retrys = 6 #set try counter so loop is exited
+    time.sleep(10)  ## update again in an hours time
+```
