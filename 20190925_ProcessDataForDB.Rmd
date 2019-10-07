@@ -44,6 +44,10 @@ jupyter:
 
 
 ### libraries
+```{r connector}
+library(reticulate)
+```
+
 
 ```{python}
 import datetime
@@ -71,7 +75,7 @@ AllData=pd.read_csv(path + 'DownloadedData/StonyLysimetersCS650.dat', #specify f
 ```
 
 ```{python}
-AllData
+AllData.tail()
 ```
 
 
@@ -81,6 +85,7 @@ AllDataIndex = pd.read_excel(path + "Lysometer_design.xlsx",
                              sheet_name="SensorIndex",
                              index_col = 0)
 AllDataIndex.head()
+
 ```
 
 ```{python}
@@ -90,11 +95,8 @@ FilteredIndex=AllDataIndex[AllDataIndex.Measurement.isin(['VolumetricWaterConten
 
 ```{python}
 FilteredIndex.head()
-```
-
-
-```{python}
 FilteredIndex.describe()
+np.load('LastRow.npy')
 ```
 
 ```{python}
@@ -112,15 +114,29 @@ FilteredDataIndexed.set_index(['Measurement','Depth','Gravels','Stones','Column'
                         append=False, inplace=True)
 FilteredDataIndexed.sort_index(inplace=True)
 FieldData=FilteredDataIndexed.transpose()
-FieldData.index = pd.to_datetime(FieldData.index) 
 LastRow = FieldData.index.size
+FieldData.index = pd.to_datetime(FieldData.index) 
+
 np.save('LastRow.npy',LastRow)
 FieldData.to_pickle('.\FieldData.pkl')
 ```
+
+### Save the last ob as a starting point for next up date
+
+```{python}
+LastRow=np.load('LastRow.npy')
+LastRow
+# =163055
+
+```
+
+### Summarising 
+
 ```{python}
 # last filter to get ready upload the raw 
 # is not actually calculate any mean, just want to see the data
-grouped = FieldData.loc['2015-10-10':].groupby(level=['Sensor'],axis=1).mean().round(2)
+grouped = FieldData.loc['2018-10-10':].groupby(level=['Sensor'],axis=1).mean().round(2)
+grouped
 ```
 
 
@@ -128,12 +144,14 @@ grouped = FieldData.loc['2015-10-10':].groupby(level=['Sensor'],axis=1).mean().r
 
 ```{python}
 # slice 2000 rows as a test set
-Test=FieldData.iloc[(LastRow-2000):LastRow, ]
+rows=list(range(LastRow-672, LastRow))
+Test=FieldData.iloc[rows, ]
 Test.head()
 ```
 
 ```{python}
 # round values to 2 decimals for quick upload
+# there must be clear way to group things without mean calculation
 Testgrouped = Test.groupby(level=['Depth','Sensor'],axis=1).mean().round(2)
 
 # change the index into single column name
@@ -146,7 +164,7 @@ Testgrouped.columns= (L1 + '_' + L2)
 
 ```{python}
 # slice two sets from the test. one pretends to be the old file, one for update 
-Testgrouped = Testgrouped.dropna(axis=1, how='all')
+# Testgrouped = Testgrouped.dropna(axis=1, how='all')
 T1 = Testgrouped.iloc[0 : (Testgrouped.index.size - 10), ]
 T2 = Testgrouped.iloc[(Testgrouped.index.size - 10) : Testgrouped.index.size, ]
 ```
@@ -159,70 +177,127 @@ T2# Checking the time
 ```
 
 
-```{r, message=FALSE, warning=FALSE}
-source("./DBconnection_funs.R")
-con = setupDBConn()
-dbListTables(con)
-
-dbWriteTable(con, name = "Test", value = py$T1, overwrite = TRUE)
-
-dbWriteTable(con, name = "Test", value = py$T2, append = TRUE) 
-sql <- paste0("CREATE INDEX ON Test (row.names);")
-  dbExecute(con, sql)
-```
-
 ### DB connection and uploading
 
 ```{python}
 # FieldData.dtypes
 # FieldData.index
 engine = create_engine("postgresql://cflfcl_Rainshelter_SWC:o654UkI6iGNwhzHu@database.powerplant.pfr.co.nz/cflfcl_Rainshelter_SWC")
-# grouped.to_sql(name="RawData_96Sensors",con=engine,if_exists='replace' )
+Testgrouped.to_sql(name="Test",con=engine,if_exists='replace' ) # will over write db
+```
+
+
+
+```{python}
+
+
+skips=[0,2] + list(range(3, LastRow + 4)) 
+# the 'LastRow' vector is the last row in the imported data frame 
+# not the right one in the raw data 
+# use +4 to correct it, might need to pay attention for future bugs. 
+
+```
+
+### try skip reading 
+```{python}
+
+
+appendData=pd.read_csv(path + 'DownloadedData/StonyLysimetersCS650.dat', #specify file path for data to read in
+                         parse_dates=True, #tell the function to parse date columns to datetime formats
+                         dayfirst=True, #tell the function that the day is before the year in the data i.e format='%d/%m/%Y %H:%M'
+                         skiprows = skips, #leave out rows 1, 3 and 4 which have redundant information
+                         index_col = 0, #Use the first column, which is Date, as an index
+                         na_values = 'NAN')
+
+```
+```{python}
+# import re
+# pattern=r'-07 '
+# FAKE a df for appending
+# T2.index = T2.index.to_series().astype(str).str.replace(r'-07 ','-08 ')
+appendData.index
+appendData.columns
+LastRow=appendData.index.size + LastRow
+LastRow
 ```
 
 **Updating the DB**
 
-```{python}
-try:
-    con = psycopg2.connect(
-        host = "database.powerplant.pfr.co.nz",
-        database = "cflfcl_Rainshelter_SWC",
-        user = "cflfcl_Rainshelter_SWC",
-        password = "o654UkI6iGNwhzHu"
-    )
-    cursor = con.cursor()
-    # Print PostgreSQL Connection properties
-    print ( con.get_dsn_parameters(),"\n")
-    
-    con.commit()
-    count = cursor.rowcount
-    print (count) 
-    
-    # Print PostgreSQL version
-    cursor.execute("SELECT version();")
-    record = cursor.fetchone()
-    print("You are connected to - ", record,"\n")
-
-except (Exception, psycopg2.Error) as error :
-    print ("Error while connecting to PostgreSQL", error)
-finally:
-    #closing database connection.
-        if(con):
-            cursor.close()
-            con.close()
-            print("PostgreSQL connection is closed")
-```
 
 ```{python}
-#Place holder for `.csv` index file
-# AllDataIndex=pd.read_csv('./IndexFiles/SoilWaterAndTempIndex.csv',
-#                          index_col = 0)
-# AllDataIndex
+# T2.to_sql(name="Test",con=engine,if_exists='append' )
+LastRead = np.load('LastRow.npy')
 ```
 
+
+## TEST an update fun
 ```{python}
-grouped.tail()
+# def UpdataDataFrame():
+#Bring in previous status files
+LastRead = np.load('LastRow.npy')
+LastRead
+FieldData = pd.read_pickle('FieldData.pkl')
+FieldData.index.size
+np.save()
 ```
+
+#Bring in index data
+AllDataIndex = pd.read_excel(path + "Lysometer_design.xlsx",
+                         sheet_name="SensorIndex",
+                         index_col = 0)
+
+#Bring in fresh data
+StartRead = LastRead + 4
+Skips = [0,2,3] + list(range(4,StartRead))
+FreshData=pd.read_csv(path + 'DownloadedData/StonyLysimetersCS650.dat', #specify file path for data to read in    
+                      parse_dates=True, #tell the function to parse date columns to datetime formats
+                      dayfirst=True, #tell the function that the day is before the year in the data i.e format='%d/%m/%Y %H:%M'
+                      skiprows = Skips, #rows that have already be read
+                      index_col = 0, #Use the first column, which is Date, as an index
+                      na_values = 'NAN')
+
+#Apply indexes to fresh data
+FilteredIndex=AllDataIndex[AllDataIndex.Measurement.isin(['VolumetricWaterContent'])] # structure to add in more cols
+FreshData=FreshData.loc[:,FilteredIndex.index]
+
+FreshDataTransposed = FreshData.transpose()
+FreshDataIndexed = pd.concat([FilteredIndex,FreshDataTransposed], axis=1, sort=True)
+FreshDataIndexed.index.name='ColumnHeader'
+FreshDataIndexed.set_index(['Measurement','Depth','Gravels','Stones','Column','Sensor', 'MUX', 'Port','Units','Summary','Block','Treatment'],
+                        append=False, inplace=True) # need to automate
+FreshDataIndexed.sort_index(inplace=True)
+NewData=FreshDataIndexed.transpose()
+
+NewData.index = pd.to_datetime(NewData.index) 
+
+#Rename the fresh data to concat the colnames 
+## round values to 2 decimals for quick upload
+## there must be clear way to group things without mean calculation
+FieldDatagrouped = NewData.groupby(level=['Depth','Sensor'],axis=1).mean().round(2)
+
+## change the index into single column name
+L1 = FieldDatagrouped.columns.get_level_values(0)
+L2 = FieldDatagrouped.columns.get_level_values(1)
+
+## rename the columns
+FieldDatagrouped.columns= (L1 + '_' + L2)
+
+#Update the DB 
+## create the engine for connection
+engine = create_engine("postgresql://cflfcl_Rainshelter_SWC:o654UkI6iGNwhzHu@database.powerplant.pfr.co.nz/cflfcl_Rainshelter_SWC")
+FieldDatagrouped.to_sql(name="Test",con=engine,if_exists='append' )
+
+#Update status files
+LastRow = FieldDatagrouped.index.size + LastRead
+```
+```{python}
+# np.save('LastRow.npy',LastRow)
+np.load('LastRow.npy')
+```
+
+
+
+
 
 ### Calculate Deficit 
 
@@ -290,3 +365,18 @@ while True:
                 retrys = 6 #set try counter so loop is exited
     time.sleep(10)  ## update again in an hours time
 ```
+
+
+
+```{r, message=FALSE, warning=FALSE}
+source("./DBconnection_funs.R")
+con = setupDBConn()
+dbListTables(con)
+
+dbWriteTable(con, name = "Test", value = py$T1, overwrite = TRUE)
+
+dbWriteTable(con, name = "Test", value = py$T2, append = TRUE) 
+sql <- paste0("CREATE INDEX ON Test (row.names);")
+  dbExecute(con, sql)
+```
+
