@@ -42,7 +42,7 @@ jupyter:
 
     K:\Rainshelter\StonySoilLysimeters
 
-
+# The initial data base test 
 ### libraries
 ```{r connector}
 library(reticulate)
@@ -127,7 +127,7 @@ FieldData.to_pickle('.\FieldData.pkl')
 LastRow=np.load('LastRow.npy')
 LastRow
 # =163055
-
+FieldData
 ```
 
 ### Summarising 
@@ -160,20 +160,6 @@ L2 = Testgrouped.columns.get_level_values(1)
 
 # rename the columns
 Testgrouped.columns= (L1 + '_' + L2)
-```
-
-```{python}
-# slice two sets from the test. one pretends to be the old file, one for update 
-# Testgrouped = Testgrouped.dropna(axis=1, how='all')
-T1 = Testgrouped.iloc[0 : (Testgrouped.index.size - 10), ]
-T2 = Testgrouped.iloc[(Testgrouped.index.size - 10) : Testgrouped.index.size, ]
-```
-
-```{python}
-# Checking the time 
-T1.iloc[(T1.index.size - 1):T1.index.size,]
-
-T2# Checking the time 
 ```
 
 
@@ -297,7 +283,7 @@ np.load('LastRow.npy')
 
 
 
-
+# unwanted bits
 
 ### Calculate Deficit 
 
@@ -378,5 +364,19 @@ dbWriteTable(con, name = "Test", value = py$T1, overwrite = TRUE)
 dbWriteTable(con, name = "Test", value = py$T2, append = TRUE) 
 sql <- paste0("CREATE INDEX ON Test (row.names);")
   dbExecute(con, sql)
+```
+
+```{python}
+# slice two sets from the test. one pretends to be the old file, one for update 
+# Testgrouped = Testgrouped.dropna(axis=1, how='all')
+T1 = Testgrouped.iloc[0 : (Testgrouped.index.size - 10), ]
+T2 = Testgrouped.iloc[(Testgrouped.index.size - 10) : Testgrouped.index.size, ]
+```
+
+```{python}
+# Checking the time 
+T1.iloc[(T1.index.size - 1):T1.index.size,]
+
+T2# Checking the time 
 ```
 

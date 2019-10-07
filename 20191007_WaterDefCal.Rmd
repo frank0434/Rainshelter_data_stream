@@ -54,8 +54,34 @@ import datetime
 import pandas as pd
 import numpy as np
 import time 
-import psycopg2
+import matplotlib.pyplot as plt
+import chart_studio.plotly as py
+import plotly.tools as tls
+import plotly.graph_objs
 from sqlalchemy import create_engine
+```
+
+## Import the Test pickle data set
+
+_Note_
+
+**ADD** the `pkl` step into the `UpdateDataFrame` function in []()
+**However**, write a small `pkl` into the DB before it's overwritten by the automatic update. 
+The `.pkl` is an subsetted data set from the raw `.dat`.
+It has index already.
+
+
+Altered the table on web to delete all `NULL`
+
+```
+delete from "the_table"
+where "date" is null
+   or "persons" is null
+   or "two_wheelers" is null
+   or "cars" is null
+   or "vans" is null
+   or "buses" is null
+   or "autos" is null;
 ```
 
 ```{python}
@@ -65,21 +91,81 @@ TestData=pd.read_pickle('FieldData.pkl')
 ```{python}
 DataMeans = TestData.loc['2018-10-10':].groupby(level=['Measurement','Depth','Gravels','Stones'],axis=1).mean()
 DataMeans =  DataMeans.dropna(axis=1) #For some reason it keeps non valid combinations in so need to extract with this function
-DataMeans = DataMeans.resample('4H').last()
+DataMeans = DataMeans.resample('4H').last() # 4 hours subsetting
+
 #Calculate the water content of the soil profile by multiplying the volumetric water content by each layers
-#depth and summing.  The 0-15 layers are divided by 2 to average the two readings
+#depth and summing. 
+
 ProfileWater = DataMeans.VolumetricWaterContent.loc[:, 'D1'] * 150 + \
                DataMeans.VolumetricWaterContent.loc[:, 'D2'] * 150 + \
                DataMeans.VolumetricWaterContent.loc[:, 'D3'] * 150 + \
                DataMeans.VolumetricWaterContent.loc[:, 'D4'] * 150 
+
+# extract the stone and gravel description for renaming
+L1 = ProfileWater.columns.get_level_values(0)
+L2 = ProfileWater.columns.get_level_values(1)
+
+
+# rename the columns
+ProfileWater.columns = L1 + '_' + L2
+
 FieldCapacity = ProfileWater.resample('D').last()
 SoilWaterDeficit = -(FieldCapacity - ProfileWater)
 ```
 
+```{python}
 
-```{r}
-py$FieldCapacity
-# py$SoilWaterDeficit
+# FieldCapacity
+# SoilWaterDeficit
+ProfileWater
+```
+
+## Read an initial data set into the DB
+
+```{python}
+engine = create_engine("postgresql://cflfcl_Rainshelter_SWC:o654UkI6iGNwhzHu@database.powerplant.pfr.co.nz/cflfcl_Rainshelter_SWC")
+SoilWaterDeficit.to_sql(name="SoilWaterDeficit",con=engine,if_exists='replace' ) # will over write db
+ProfileWater.to_sql(name="ProfileWater",con=engine,if_exists='replace' ) # will over write db
 ```
 
 
+```{r}
+library(ggplot2)
+library(data.table)
+library(dplyr)
+swd = as.data.table(py$SoilWaterDeficit, keep.rownames = TRUE )
+swd[, rn := lubridate::ymd_hms(rn)] %>% 
+  ggplot(aes(rn, Deep_StoneFree)) +
+  geom_point() +
+  geom_line() +
+  theme_classic()
+colnames(swd)
+```
+
+## A bit plotting for checking
+
+```{python}
+SoilWaterDeficit.dropna().plot(figsize=(18,14),style=['r--','b--','g--','r-','b-','g-'], linewidth=4)
+plt.ylabel('Soil Water Deficit (mm)', fontsize=36);
+plt.tick_params(labelsize=25)
+plt.title('Lysimeter stone', fontsize=28);
+plt.legend(fontsize=24, loc=4)
+plt.show()
+```
+
+**Plot shows nothing**
+probably too many NAs
+
+
+```{python}
+DailyProfile = ProfileWater.loc[ProfileWater.index.hour == 20,:].resample('D').mean()
+DailyProfile.index.name = 'Date'
+DailyProfile.plot(figsize=(18,14), linewidth=4)
+plt.show()
+```
+
+
+
+## Problems
+
+1. add new update function 
