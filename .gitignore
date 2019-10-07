@@ -2,3 +2,9 @@
 .Rhistory
 .RData
 .Ruserdata
+
+
+# files that don't want to show 
+*.pkl
+*.npy
+.ipynd_checkpoints/*
