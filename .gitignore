@@ -2,9 +2,9 @@
 .Rhistory
 .RData
 .Ruserdata
-
-
-# files that don't want to show 
+# files that don't want to show
 *.pkl
 *.npy
 .ipynd_checkpoints/*
+20191007_Streaming_DATA.ipynb
+LastRow.npy
