@@ -1,0 +1,85 @@
+---
+jupyter:
+  jupytext:
+    formats: ipynb,Rmd
+    text_representation:
+      extension: .Rmd
+      format_name: rmarkdown
+      format_version: '1.1'
+      jupytext_version: 1.2.4
+  kernelspec:
+    display_name: Python 3
+    language: python
+    name: python3
+---
+
+# ReadMe
+
+**This is the notebook to import the data from K/I/whatever the driver is and send raw/cleaned data to a postgresql DB on powerplant.**
+
+**Plan:**
+
+1. Read data from db/the same source/maybe the pkl file? 
+2. Select down to right TDR measurments
+3. Send the raw data from each tdr to DB - this is for examing the suprise values 
+4. Clean out missing and stupid high values
+5. Average the value in each layer (7 layers in total)
+6. Calculate deficit 
+7. Upload the calculated deficit to DB - for real irrigation scheduling - need to be a separate table 
+
+**PostgreSQL credentials**
+
+    host = "database.powerplant.pfr.co.nz",
+    database = "cflfcl_Rainshelter_SWC",
+    user = "cflfcl_Rainshelter_SWC",
+    password = "o654UkI6iGNwhzHu"
+    
+**Format that `sqlalchemy` like**
+    
+    "postgresql://cflfcl_Rainshelter_SWC:o654UkI6iGNwhzHu@database.powerplant.pfr.co.nz/cflfcl_Rainshelter_SWC"
+    
+**Demo data source**
+
+    K:\Rainshelter\StonySoilLysimeters
+
+
+### libraries
+```{r connector}
+library(reticulate)
+```
+
+
+```{python}
+import datetime
+import pandas as pd
+import numpy as np
+import time 
+import psycopg2
+from sqlalchemy import create_engine
+```
+
+```{python}
+TestData=pd.read_pickle('FieldData.pkl')
+```
+
+```{python}
+DataMeans = TestData.loc['2018-10-10':].groupby(level=['Measurement','Depth','Gravels','Stones'],axis=1).mean()
+DataMeans =  DataMeans.dropna(axis=1) #For some reason it keeps non valid combinations in so need to extract with this function
+DataMeans = DataMeans.resample('4H').last()
+#Calculate the water content of the soil profile by multiplying the volumetric water content by each layers
+#depth and summing.  The 0-15 layers are divided by 2 to average the two readings
+ProfileWater = DataMeans.VolumetricWaterContent.loc[:, 'D1'] * 150 + \
+               DataMeans.VolumetricWaterContent.loc[:, 'D2'] * 150 + \
+               DataMeans.VolumetricWaterContent.loc[:, 'D3'] * 150 + \
+               DataMeans.VolumetricWaterContent.loc[:, 'D4'] * 150 
+FieldCapacity = ProfileWater.resample('D').last()
+SoilWaterDeficit = -(FieldCapacity - ProfileWater)
+```
+
+
+```{r}
+py$FieldCapacity
+# py$SoilWaterDeficit
+```
+
+
